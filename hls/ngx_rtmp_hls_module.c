@@ -586,7 +586,7 @@ ngx_rtmp_hls_write_playlist(ngx_rtmp_session_t *s)
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "hls: found starting fragment=%i", start_i);
 
-    for (i = start_i; i < ctx->nfrags; i++) {
+    for (i = start_i; i < (ngx_int_t) ctx->nfrags; i++) {
         f = ngx_rtmp_hls_get_frag(s, i);
         if (f->duration > max_frag) {
             max_frag = (ngx_uint_t) (f->duration + .5);
