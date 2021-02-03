@@ -317,9 +317,11 @@ ngx_rtmp_record_open(ngx_rtmp_session_t *s, ngx_uint_t n, ngx_str_t *path)
     }
 
     rc = ngx_rtmp_record_node_open(s, rctx);
-    if (rc != NGX_OK) {
+    if (rc != NGX_OK && rc != NGX_AGAIN) {
         return rc;
     }
+
+    rctx->started = 1;
 
     if (path) {
         ngx_rtmp_record_make_path(s, rctx, path);
@@ -343,6 +345,8 @@ ngx_rtmp_record_close(ngx_rtmp_session_t *s, ngx_uint_t n, ngx_str_t *path)
     if (rctx == NULL) {
         return NGX_ERROR;
     }
+
+    rctx->started = 0;
 
     rc = ngx_rtmp_record_node_close(s, rctx);
     if (rc != NGX_OK) {
@@ -457,6 +461,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
     u_char                      buf[8], *p;
     off_t                       file_size;
     uint32_t                    tag_size, mlen, timestamp;
+    ngx_int_t                   started;
 
     rracf = rctx->conf;
     tag_size = 0;
@@ -468,10 +473,12 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "record: %V opening", &rracf->id);
 
+    started = rctx->started;
     ngx_memzero(rctx, sizeof(*rctx));
     rctx->conf = rracf;
     rctx->last = *ngx_cached_time;
     rctx->timestamp = ngx_cached_time->sec;
+    rctx->started = started;
 
     ngx_rtmp_record_make_path(s, rctx, &path);
 
@@ -496,7 +503,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
 
         ngx_rtmp_record_notify_error(s, rctx);
 
-        return NGX_OK;
+        return NGX_ERROR;
     }
 
 #if !(NGX_WIN32)
@@ -681,6 +688,7 @@ ngx_rtmp_record_start(ngx_rtmp_session_t *s)
         if (rctx->conf->flags & (NGX_RTMP_RECORD_OFF|NGX_RTMP_RECORD_MANUAL)) {
             continue;
         }
+        rctx->started = 1;
         ngx_rtmp_record_node_open(s, rctx);
     }
 }
@@ -1074,8 +1082,29 @@ ngx_rtmp_record_node_avd(ngx_rtmp_session_t *s, ngx_rtmp_record_rec_ctx_t *rctx,
              ? keyframe
              : (rracf->flags & NGX_RTMP_RECORD_VIDEO) == 0;
 
-    if ((rracf->flags & NGX_RTMP_RECORD_MANUAL) &&
-        !brkframe && rctx->nframes == 0)
+    if (brkframe && rctx->started) {
+
+        if (rracf->interval != (ngx_msec_t) NGX_CONF_UNSET) {
+
+            next = rctx->last;
+            next.msec += rracf->interval;
+            next.sec  += (next.msec / 1000);
+            next.msec %= 1000;
+
+            if (ngx_cached_time->sec  > next.sec ||
+               (ngx_cached_time->sec == next.sec &&
+                ngx_cached_time->msec > next.msec))
+            {
+                ngx_rtmp_record_node_close(s, rctx);
+                ngx_rtmp_record_node_open(s, rctx);
+            }
+
+        } else if (!rctx->failed && !(rracf->flags & NGX_RTMP_RECORD_MANUAL)) {
+            ngx_rtmp_record_node_open(s, rctx);
+        }
+    }
+
+    if (!brkframe && rctx->nframes == 0)
     {
         return NGX_OK;
     }
@@ -1266,26 +1295,26 @@ ngx_rtmp_record_recorder(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
-#if defined(nginx_version) && nginx_version >= 1009011
+#if (nginx_version >= 1009011)
     modules = cf->cycle->modules;
 #else
     modules = ngx_modules;
 #endif
-    for (i = 0; modules[i]; i++) {
-        if (modules[i]->type != NGX_RTMP_MODULE) {
-            continue;
-        }
+        for (i = 0; modules[i]; i++) {
+            if (modules[i]->type != NGX_RTMP_MODULE) {
+                continue;
+            }
 
-        module = modules[i]->ctx;
+            module = modules[i]->ctx;
 
-        if (module->create_app_conf) {
-            ctx->app_conf[modules[i]->ctx_index] =
-                                module->create_app_conf(cf);
-            if (ctx->app_conf[modules[i]->ctx_index] == NULL) {
-                return NGX_CONF_ERROR;
+            if (module->create_app_conf) {
+                ctx->app_conf[modules[i]->ctx_index] =
+                                    module->create_app_conf(cf);
+                if (ctx->app_conf[modules[i]->ctx_index] == NULL) {
+                    return NGX_CONF_ERROR;
+                }
             }
         }
-    }
 
     /* add to sub-applications */
     rcacf = ctx->app_conf[ngx_rtmp_core_module.ctx_index];

@@ -580,11 +580,16 @@ ngx_rtmp_netcall_http_format_session(ngx_rtmp_session_t *s, ngx_pool_t *pool)
         return NULL;
     }
 
-    /**
-     * @2016-04-20 sergey-dryabzhinsky
-     * Not all params may be filled in session
-     * So not override them with empty values
-     */
+    b = ngx_create_temp_buf(pool,
+            sizeof("app=") - 1 + s->app.len * 3 +
+            sizeof("&flashver=") - 1 + s->flashver.len * 3 +
+            sizeof("&swfurl=") - 1 + s->swf_url.len * 3 +
+            sizeof("&tcurl=") - 1 + s->tc_url.len * 3 +
+            sizeof("&pageurl=") - 1 + s->page_url.len * 3 +
+            sizeof("&addr=") - 1 + addr_text->len * 3 +
+            sizeof("&clientid=") - 1 + NGX_INT_T_LEN +
+            (s->send_args ? (s->args.len + 1) : 0)
+        );
 
     bsize = sizeof("&addr=") - 1 + addr_text->len * 3 +
             sizeof("&clientid=") - 1 + NGX_INT_T_LEN;
@@ -650,6 +655,11 @@ ngx_rtmp_netcall_http_format_session(ngx_rtmp_session_t *s, ngx_pool_t *pool)
     b->last = ngx_cpymem(b->last, (u_char*) "&clientid=",
                          sizeof("&clientid=") - 1);
     b->last = ngx_sprintf(b->last, "%ui", (ngx_uint_t) s->connection->number);
+
+    if (s->send_args) {
+        *b->last++ = '&';
+        b->last = ngx_cpymem(b->last, s->args.data, s->args.len);
+    }
 
     return cl;
 }
